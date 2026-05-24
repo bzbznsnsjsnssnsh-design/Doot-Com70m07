@@ -14,3 +14,94 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * Extract, transcribe, translate and synthesize speech for a 60-second video segment
+ * @summary Process video segment
+ */
+export const ProcessVideoBody = zod.object({
+  videoUrl: zod.string().describe("YouTube video URL"),
+  startTime: zod.number().describe("Start time in seconds"),
+  voice: zod.string().describe("Edge TTS voice name"),
+  translationEngine: zod
+    .enum(["openai", "google", "pollinations"])
+    .optional()
+    .describe("Translation engine to use (openai, google, pollinations)"),
+  forceAudioExtraction: zod
+    .boolean()
+    .optional()
+    .describe("Skip captions and extract audio directly for AI transcription"),
+});
+
+export const ProcessVideoResponse = zod.object({
+  jobId: zod.string(),
+  status: zod.string(),
+  message: zod.string(),
+});
+
+/**
+ * @summary Get job processing status
+ */
+export const GetJobStatusParams = zod.object({
+  jobId: zod.coerce.string(),
+});
+
+export const GetJobStatusResponse = zod.object({
+  jobId: zod.string(),
+  status: zod.enum(["pending", "processing", "completed", "failed"]),
+  progress: zod.string(),
+  audioUrl: zod.string().nullish(),
+  transcript: zod.string().nullish(),
+  translation: zod.string().nullish(),
+  error: zod.string().nullish(),
+  startTime: zod.number().nullish(),
+  suggestedRate: zod.number().nullish(),
+  audioDurationSec: zod.number().nullish(),
+});
+
+/**
+ * @summary Get processed audio file
+ */
+export const GetAudioParams = zod.object({
+  jobId: zod.coerce.string(),
+});
+
+/**
+ * @summary Get available TTS models and voices
+ */
+export const GetTtsModelsResponse = zod.object({
+  voices: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      lang: zod.string(),
+    }),
+  ),
+});
+
+/**
+ * @summary Check if YouTube cookies are saved
+ */
+export const GetCookiesStatusResponse = zod.object({
+  hasCookies: zod.boolean(),
+});
+
+/**
+ * @summary Save YouTube cookies
+ */
+export const SaveCookiesBody = zod.object({
+  cookies: zod.string(),
+});
+
+export const SaveCookiesResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
+
+/**
+ * @summary Delete saved YouTube cookies
+ */
+export const DeleteCookiesResponse = zod.object({
+  success: zod.boolean(),
+  message: zod.string().optional(),
+});
