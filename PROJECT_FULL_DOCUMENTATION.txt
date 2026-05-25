@@ -1,0 +1,962 @@
+===============================================================
+   مترجم الفيديو - شرح شامل لجميع المكونات والأكواد
+   Video Translator - Complete Project Documentation
+===============================================================
+
+تاريخ الإنشاء: 25 مايو 2026
+المؤلف: Replit Agent
+الإصدار: 1.0
+
+===============================================================
+   الجزء 1: نظرة عامة وهيكل المشروع
+===============================================================
+
+هذا المشروع هو "مترجم الفيديو" - تطبيق ويب يترجم فيديوهات يوتيوب إلى العربية
+مع توليد صوت عربي متزامن مع الفيديو الأصلي.
+
+هيكل المشروع (Monorepo):
+===============================================================
+
+المشروع/
+├─ lib/
+│   ├─ api-spec/          ← تعريف واجهة البرمجة (OpenAPI)
+│   ├─ api-zod/           ← أنماط التحقق من البيانات
+│   ├─ api-client-react/  ← أوامر React Query جاهزة
+│   └─ db/                ← قاعدة البيانات (PostgreSQL + Drizzle)
+│
+├─ artifacts/
+│   ├─ video-translator/  ← الواجهة الأمامية (ما تراه كمستخدم)
+│   ├─ api-server/        ← الخادم الخلفي (المعالج)
+│   └─ mockup-sandbox/    ← بيئة تطوير المكونات البصرية
+│
+├─ scripts/               ← سكربتات مساعدة
+├─ pnpm-workspace.yaml    ← تعريف حزم workspace
+└─ package.json           ← الأوامر الرئيسية
+
+التقنيات المستخدمة:
+===============================================================
+• Frontend: React 19, Vite 7, Tailwind CSS 4, Framer Motion, Wouter
+• Backend: Express.js, Node.js 24, Pino (logging)
+• AI/ML: faster-whisper (Python), OpenAI API, Microsoft Edge TTS
+• Multimedia: ffmpeg (معالجة الصوت), yt-dlp (تحميل من يوتيوب)
+• Database: PostgreSQL + Drizzle ORM
+• Monorepo: PNPM Workspaces
+
+===============================================================
+   الجزء 2: المكتبات المشتركة (lib/)
+===============================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ lib/api-spec/openapi.yaml ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+هذا الملف يُعرّف كل نقاط API التي يقدمها الخادم.
+يستخدم أداة Orval لتوليد الكود تلقائياً من هذا الملف.
+
+نقاط API المعرفة:
+  GET  /healthz              - فحص صحة الخادم
+  POST /translate/process     - بدء معالجة مقطع فيديو
+  GET  /translate/status/:id - الاستعلام عن حالة المهمة
+  GET  /translate/audio/:id  - جلب ملف الصوت
+  GET  /translate/models     - قائمة الأصوات المتاحة
+  GET  /translate/info?url=  - معلومات الفيديو (العنوان)
+  GET  /translate/cookies/status
+  POST /translate/cookies      - حفظ كوكيز
+  DELETE /translate/cookies   - حذف كوكيز
+
+الأنماط (Schemas):
+  ProcessVideoRequest:
+    - videoUrl: string          (رابط يوتيوب)
+    - startTime: number          (وقت البداية بالثواني)
+    - voice: string             (اسم صوت Edge TTS)
+    - translationEngine: enum   ("openai" | "google" | "pollinations")
+    - forceAudioExtraction: boolean
+
+  JobStatusResponse:
+    - jobId, status, progress
+    - audioUrl, transcript, translation
+    - error, startTime, suggestedRate
+    - audioDurationSec
+    - sentences: []              (مصفوفة الجمل مع التوقيتات)
+
+  TtsVoice:
+    - id, name, lang            (14 صوت عربي + متعدد اللغات)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ lib/api-zod/src/generated/api.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+أنماط Zod تُولّد تلقائياً من OpenAPI.
+تُستخدم للتحقق من صحة البيانات في الخادم والواجهة.
+
+الأنماط الرئيسية:
+• ProcessVideoBody          - التحقق من طلب المعالجة
+• GetJobStatusParams        - التحقق من معرّف المهمة
+• HealthCheckResponse       - استجابة الصحة
+• GetTtsModelsResponse      - قائمة الأصوات
+• SaveCookiesBody           - محتوى الكوكيز
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ lib/api-client-react/src/generated/api.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+React Query Hooks تُولّد تلقائياً من OpenAPI.
+
+useGetTtsModels()           - جلب قائمة الأصوات
+useProcessVideo()           - إرسال طلب المعالجة
+useGetJobStatus(jobId)       - استعلام الحالة
+useGetAudio(jobId)          - جلب الصوت
+useGetCookiesStatus()       - حالة الكوكيز
+useSaveCookies()            - حفظ الكوكيز
+useDeleteCookies()          - حذف الكوكيز
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ lib/db/src/index.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+إعداد قاعدة البيانات PostgreSQL باستخدام Drizzle ORM.
+
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
+
+const { Pool } = pg;
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL must be set");
+}
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+export const db = drizzle(pool, { schema });
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ lib/db/src/schema/index.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+المخطط فارغ حالياً (قاعدة البيانات لا تُستخدم للمهام،
+المهام تُخزّن في الذاكرة فقط عبر Map في jobs.ts).
+
+===============================================================
+   الجزء 3: الواجهة الأمامية (video-translator)
+===============================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/video-translator/src/App.tsx ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+نقطة بداية التطبيق:
+• QueryClientProvider - لإدارة الاستعلامات (React Query)
+• TooltipProvider - لتلميحات الأدوات
+• WouterRouter - الموجه مع base URL
+• Toaster - إشعارات Toast
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/video-translator/src/main.tsx ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+نقطة الدخول الرئيسية:
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import "./index.css";
+createRoot(document.getElementById("root")!).render(<App />);
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/video-translator/src/pages/not-found.tsx ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+صفحة الخطأ 404 - تعرض بطاقة بيضاء مع رسالة "Page Not Found".
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/video-translator/src/hooks/use-youtube-url.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Hook لتحليل والتحقق من روابط يوتيوب.
+
+function extractYouTubeId(url: string): string | null {
+  const match = url.match(
+    /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?\n]+)/
+  );
+  return match ? match[1] : null;
+}
+
+function buildDirectVideoUrl(url: string): string | null {
+  // يدعم أيضاً pixeldrain وروابط الفيديو المباشرة (mp4, webm, ogg...)
+}
+
+الـ Hook يرجع:
+• url, setUrl         - الرابط المُدخل
+• videoId             - معرّف يوتيوب أو null
+• directVideoUrl      - رابط مباشر أو null
+• isValid             - true إذا كان رابط صالح
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/video-translator/src/hooks/use-youtube-player.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Hook لتحميل والتحكم بمشغل يوتيوب.
+
+الخطوات:
+1. loadYouTubeAPI() - يُحمّل YouTube Iframe API من
+   https://www.youtube.com/iframe_api
+
+2. new window.YT.Player() - يُنشئ مشغل يوتيوب في div محدد
+
+إعدادات المشغل:
+• autoplay: 0           (لا تشغيل تلقائي)
+• controls: 1           (عرض أزرار التحكم)
+• rel: 0               (لا فيديوهات ذات صلة)
+• modestbranding: 1     (إخفاء شعار يوتيوب)
+• iv_load_policy: 3     (إخفاء التعليقات المصورة)
+• playsinline: 1        (التشغيل داخل الصفحة)
+
+الدالة تُرجع:
+• getPlayer() - للوصول للمشغل
+• playerRef   - مرجع React للمشغل
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/video-translator/src/components/pipeline-bar.tsx ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+شريط التقدم المتحرك - يُظهر حالة معالجة المقطع الحالي.
+
+الخطوات البصرية (5 خطوات):
+1. تنزيل الصوت      (20%)
+2. تحويل لنص        (55%)
+3. ترجمة            (75%)
+4. توليد صوت        (90%)
+5. جاهز!            (100%)
+
+الرموز:
+• 🎙️ / Mic  = تحويل الصوت لنص
+• 🌍 / Languages = الترجمة
+• 🔊 / Sparkles = توليد الصوت
+• ⬇️ / Download = التنزيل
+• ✅ / CheckCircle2 = اكتمل
+
+الأيقونة تدور باستمرار أثناء المعالجة.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/video-translator/src/components/processing-overlay.tsx ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+طبقة شفافة تغطي الفيديو أثناء المعالجة الأولية.
+
+تعرض:
+• أيقونة متحركة (حسب مرحلة المعالجة)
+• "جاري المعالجة..."
+• نص التقدم الحالي
+• "يرجى الانتظار، المقطع يُعالج في الخلفية"
+
+===============================================================
+   الجزء 4: صفحة Home.tsx الرئيسية (القلب النابض)
+===============================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ الثوابت والأنواع ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const SEGMENT_STEP  = 59;    // 59 ثانية لكل مقطع
+const POLL_MS       = 600;   // استعلام كل 600ms
+const MAX_RETRIES   = 2;     // إعادة المحاولة مرتين
+const NAV_GRACE_MS  = 1500;  // فترة السماح بعد التنقل
+
+الأنواع:
+• TranslationEngine: "openai" | "google" | "pollinations"
+• SentenceStatus: "pending" | "translating" | "tts" | "completed" | "failed"
+• StoredSentence: { videoStart, videoEnd, arabicText, audioStart, audioEnd,
+    audioUrl?, audioDuration?, sentenceStatus?, originalDuration?, ttsDuration?, speedRatio? }
+• SegJob: { jobId, status, progress, suggestedRate, audioDurationSec, sentences? }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ الدوال المساعدة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+fmt(s)          → تحويل ثواني لصيغة "m:ss"
+segLabel(start) → "m:ss – m:ss" لعرض نطاق المقطع
+getSegStart(t,step) → إيجاد بداية المقطع للوقت الحالي
+statusLabel(st)  → رمز الحالة (🌍 🔊 ✅ ❌ ⏳)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ دوال الـ API ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+postProcess(videoUrl, startTime, voice, translationEngine)
+  → POST /api/translate/process → يرجع jobId
+
+fetchStatus(jobId)
+  → GET /api/translate/status/:jobId → يرجع بيانات المهمة
+
+fetchCookiesStatus()
+  → GET /api/translate/cookies/status → true/false
+
+fetchVideoInfo(videoUrl)
+  → GET /api/translate/info?url=... → { title }
+
+postCookies(content)
+  → POST /api/translate/cookies → { success, message }
+
+deleteCookiesReq()
+  → DELETE /api/translate/cookies
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ محركات الترجمة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const TRANSLATION_ENGINES = [
+  { value: "google",       label: "Google Translate",  free: true,  description: "مجاني • سريع" },
+  { value: "pollinations", label: "Pollinations AI",     free: true,  description: "مجاني • ذكاء اصطناعي" },
+  { value: "openai",       label: "OpenAI GPT",          free: false, description: "دقيق • يحتاج مفتاح" }
+];
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ المكون الرئيسي Home.tsx ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+المراجع (Refs):
+• ytRef              - مشغل يوتيوب
+• videoRef           - عنصر الفيديو المباشر
+• audioRef           - عنصر الصوت الرئيسي
+• preloadRef         - عنصر التحميل المسبق للجملة التالية
+• jobsRef            - Map للمهام (بدون إعادة رسم)
+• activeSegRef       - المقطع النشط حالياً
+• stopRequestedRef   - طلب الإيقاف
+• waitingRef         - في وضع الانتظار
+• kickCountRef       - عدد إعادة المحاولات
+• lastRetryRef      - آخر إعادة محاولة
+• stepRef            = SEGMENT_STEP
+• lastVideoTimeRef   - آخر وقت للفيديو
+• lastSeekCheckRef   - آخر فحص للتقديم
+• playingSegRef     - المقطع المُشغّل
+• currentSentIdxRef  - فهرس الجملة الحالية
+• audioLoadedForSent - آخر جملة مُحمّلة
+• videoSentIdxRef   - فهرس الجملة الحالية في الفيديو
+• pendingNextSentRef - الجملة المعلّقة
+• currentSentTextRef - نص الجملة الحالية
+• navGraceRef        - فترة السماح بعد التنقل
+• pendingCanplayRef  - مستمع حدث canplay
+• preloadTriggeredRef - آخر URL تم تحميله مسبقاً
+• syncLoopRef        - معرّف loop التزامن
+
+الحالات (State):
+• jobs               - Map المهام (للعرض)
+• activeSeg          - المقطع النشط (للعرض)
+• processingProgress - نص التقدم الحالي
+• isRunning          - هل يعمل التشغيل الآن؟
+• ytReady            - هل جاهز مشغل يوتيوب؟
+• duration           - مدة الفيديو
+• selectedVoice      - الصوت المختار
+• selectedEngine     - محرك الترجمة
+• hasStarted         - هل بدأ المستخدم؟
+• isWaitingForProcess - هل ينتظر المعالجة؟
+• currentSentence    - النص العربي الحالي
+• currentSentenceIdx - فهرس الجملة الحالية
+• currentSpeedInfo   - معلومات السرعة (orig, tts, ratio)
+• videoTitle         - عنوان الفيديو
+• showCookies        - عرض نموذج الكوكيز
+• cookieText         - نص الكوكيز
+• hasCookies         - هل يوجد كوكيز محفوظة؟
+• cookiesSaving     - هل يحفظ الكوكيز الآن؟
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ التحميل المسبق (Preload) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+preloadSentenceAudio(seg, sentIdx):
+  - يُحمّل ملف الصوت التالي مسبقاً في عنصر audio مخفي
+  - يُخزّن في ذاكرة المتصفح (HTTP cache)
+  - عند الحاجة، يُنتقل فوراً بدون تأخير
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ تحميل وتشغيل الجملة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+loadSentenceAudio(seg, sentIdx, audioUrl, startTime):
+  الحالات المُعالجة:
+  1. نفس URL موجود مسبقاً → seek + play
+  2. مُحمّل مسبقاً في preloadRef → تبديل فوري
+  3. غير مُحمّل → إضافة مستمع canplay + load
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ التنقل بين الجمل ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+jumpToSentence(delta: 1 | -1):
+  - الانتقال للجملة التالية/السابقة
+  - تحديث موقع الفيديو (seek)
+  - تعيين فترة سماح (navGrace)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ معالج حالات يوتيوب ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+handleYtReady(e):
+  - حفظ المشغل في ytRef
+  - تعيين ytReady = true
+  - حفظ مدة الفيديو
+
+handleYtStateChange(e):
+  - ENDED  → إيقاف الصوت
+  - PAUSED → إيقاف الصوت
+  - PLAYING → تشغيل الصوت إذا كان موجود
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ loop التزامن الرئيسي (100ms) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+startSyncLoop():
+  يُشغّل loop كل 100ms يفعل:
+
+  1. قراءة وقت الفيديو الحالي
+  2. كشف التقديم (seek): إذا قفز >3s → إعادة ضبط كل شيء
+  3. تحديد المقطع الحالي: seg = getSegStart(videoTime, step)
+  4. جلب المهمة: job = jobsRef.current.get(seg)
+  5. إيجاد الجملة الحالية: sentenceIdx = findIndex(relTime)
+
+  المنطق لكل حالة:
+  - جملة معلّقة (pending): تشغيلها عند اكتمالها
+  - الفيديو تقدم +2 جمل: catch-up → تشغيل الجملة الحالية
+  - لا شيء يعمل + جملة جاهزة: تشغيلها
+  - توقف مؤقت: استئناف التشغيل
+  - تعديل سرعة الصوت: playbackRate = 1.0 + 0.5 * error
+    (بين 0.65x و 2.1x)
+  - < 0.8s متبقي: preload الجملة التالية
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ بدء المعالجة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+handleStart():
+  1. التحقق من صحة الرابط
+  2. تحديد المقطع الحالي: seg = getSegStart(videoTime, step)
+  3. التحقق من وجود مهمة جاهزة: jobsRef.current.get(seg)
+  4. إذا لم توجد → إنشاء مهمة جديدة: postProcess(...)
+  5. حفظ jobId في kickCountRef
+  6. إذا لم تبدأ بعد → startSyncLoop()
+  7. تشغيل الفيديو
+  8. إعداد polling كل 600ms للاستعلام عن الحالة
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ إيقاف التشغيل ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+handleStop():
+  - إيقاف الفيديو
+  - إيقاف loop التزامن
+  - إيقاف الصوت
+  - إعادة ضبط جميع الحالات
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ التصيير (Render) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+عناصر الواجهة:
+• شريط العنوان مع أيقونة Globe
+• حقل إدخال رابط يوتيوب + أيقونة يوتيوب
+• قائمة منسدلة: اختيار الصوت العربي
+• قائمة منسدلة: اختيار محرك الترجمة
+• زر "تشغيل" / "إيقاف"
+• زر الكوكيز (cookie)
+• مشغل يوتيوب (react-youtube)
+• أو مشغل فيديو مباشر (video element)
+• شريط التقدم (PipelineBar)
+• نص الجملة العربية الحالية (مُضيء بالإنديغو)
+• معلومات السرعة (orig, tts, ratio)
+• أزرار التنقل بين الجمل (← →)
+• قائمة الجمل مع حالاتها
+• أزرار التنقل بين المقاطع (<< >>)
+• نموذج إدخال الكوكيز (منبثق)
+
+===============================================================
+   الجزء 5: الخادم الخلفي (api-server)
+===============================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/index.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+نقطة انطلاق الخادم:
+- يقرأ PORT من متغير البيئة
+- يُشغّل app.listen(port)
+- يسجل "Server listening" عند النجاح
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/app.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+إعداد Express:
+• pinoHttp({ logger })    - تسجيل كل طلب
+• cors()                  - السماح بالاتصال من أي مصدر
+• express.json()          - تحليل JSON
+• express.urlencoded()    - تحليل Form data
+• app.use("/api", router) - كل المسارات تحت /api
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/lib/logger.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+نظام التسجيل باستخدام Pino:
+• يُسجّل معلومات، تحذيرات، أخطاء
+• يُستخدم في كل طلب HTTP (عبر pinoHttp)
+• يُستخدم في المعالجة (عبر logger.info/warn/error)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/routes/index.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+يجمع المسارات:
+• router.use(healthRouter)     - /healthz
+• router.use(translateRouter)  - /translate/*
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/routes/health.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+نقطة فحص الصحة:
+GET /healthz → { status: "ok" }
+يستخدم HealthCheckResponse من api-zod للتحقق.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/routes/translate/index.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+نقاط الترجمة الرئيسية:
+
+GET /translate/models
+  → يرجع { voices: EDGE_TTS_VOICES }
+
+GET /translate/info?url=
+  → يستدعي getVideoInfo(url)
+  → يرجع { title }
+
+GET /translate/cookies/status
+  → يستدعي hasCookies()
+  → يرجع { hasCookies: true/false }
+
+POST /translate/cookies
+  → يستلم { cookies: string }
+  → يستدعي saveCookies()
+  → يرجع { success: true, message: "تم حفظ الكوكيز" }
+
+DELETE /translate/cookies
+  → يستدعي deleteCookies()
+
+POST /translate/process
+  → يتحقق من البيانات عبر ProcessVideoBody.safeParse()
+  → يستدعي createJob(startTime)
+  → يبدأ processVideoSegment(...) في الخلفية (.catch(()=>{}))
+  → يرجع فوراً: { jobId, status: "pending", message: "بدأت المعالجة" }
+
+GET /translate/status/:jobId
+  → يتحقق من jobId عبر GetJobStatusParams.safeParse()
+  → يستدعي getJob(jobId)
+  → يرجع كل بيانات المهمة
+
+GET /translate/sentence-audio/:jobId/:idx
+  → يستدعي getSentenceAudioPath(jobId, idx)
+  → يرسل الملف كـ audio/mpeg
+  → Cache-Control: public, max-age=3600
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/routes/translate/jobs.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+إدارة المهام في الذاكرة:
+
+const jobs = new Map<string, Job>();
+const MAX_JOBS = 100;
+const JOB_TTL_MS = 60 * 60 * 1000; // ساعة واحدة
+
+interface Job {
+  jobId, status, progress
+  audioPath, transcript, translation, error
+  startTime, createdAt, suggestedRate, audioDurationSec
+  sentences: StoredSentence[]
+}
+
+الدوال:
+• createJob(startTime)   - إنشاء مهمة جديدة UUID
+• getJob(jobId)          - جلب مهمة
+• updateJob(jobId, updates) - تحديث مهمة
+• cleanOldJobs()         - تنظيف المهام القديمة (>100 أو >1h)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/routes/translate/cookies.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+إدارة كوكيز يوتيوب:
+
+const COOKIES_FILE = join(tmpdir(), "yt-cookies.txt");
+
+الدوال:
+• getCookiesPath()       - مسار ملف الكوكيز
+• hasCookies()           - هل الملف موجود؟
+• saveCookies(content)   - كتابة الملف (يفحص وجود .youtube.com)
+• deleteCookies()        - حذف الملف
+
+الاستخدام: عندما يوتيوب يطلب تسجيل الدخول (403/Sign in)،
+المستخدم يُدخل كوكيز متصفحه لتخطي الحماية.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/routes/translate/edge-tts.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+توليد الصوت العربي عبر Microsoft Edge TTS.
+
+function synthesizeEdgeTTS(text, voice, speed, outputPath):
+  - يُحوّل السرعة: ratePercent = (speed - 1.0) * 100
+  - يستدعي: python3 -m edge_tts --voice VOICE --rate +/-N% --text TEXT --write-media OUTPUT
+
+الأصوات المتاحة (14 صوت):
+🇸🇦 حامد - السعودية       (ar-SA-HamedNeural)
+🇸🇦 ذرية - السعودية       (ar-SA-ZariyahNeural)
+🇪🇬 شاكر - مصر             (ar-EG-ShakirNeural)
+🇪🇬 سلمى - مصر             (ar-EG-SalmaNeural)
+🇮🇶 باسل - العراق          (ar-IQ-BasselNeural)
+🇮🇶 رنا - العراق           (ar-IQ-RanaNeural)
+🇰🇼 فهد - الكويت           (ar-KW-FahedNeural)
+🇰🇼 نورا - الكويت          (ar-KW-NouraNeural)
+🇲🇦 جمال - المغرب          (ar-MA-JamalNeural)
+🇲🇦 منى - المغرب           (ar-MA-MounaNeural)
+🌍 Jenny - متعدد اللغات    (en-US-JennyMultilingualNeural)
+🌍 Ryan - متعدد اللغات     (en-US-RyanMultilingualNeural)
+🇫🇷 Remy - متعدد اللغات     (fr-FR-RemyMultilingualNeural)
+🇫🇷 Vivienne - متعدد اللغات (fr-FR-VivienneMultilingualNeural)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/src/routes/translate/processor.ts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+المحرك الرئيسي للمعالجة. هذا أطملف في المشروع.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ الثوابت ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const SEGMENT_DURATION = 60;   // ثواني لكل مقطع
+const MIN_ATEMPO = 1.0;          // أدنى سرعة صوت
+const MAX_ATEMPO = 2.1;          // أقصى سرعة صوت
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ تحويل الأرقام للعربية ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+numberToArabicWords(n: number):
+  يحوّل الأرقام (0-999,999) لكلمات عربية:
+  0 → صفر, 1 → واحد, 2 → اثنان, 10 → عشرة,
+  21 → واحد وعشرون, 100 → مائة, 1000 → ألف...
+
+prepareTextForTTS(text):
+  1. استبدال الأرقام بكلمات عربية
+  2. إزالة الأقواس () [] {}
+  3. تقليص المسافات المتعددة
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ تنظيف رابط يوتيوب ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+cleanYouTubeUrl(url):
+  - youtu.be/ID → https://youtu.be/ID
+  - youtube.com/watch?v=ID&... → youtube.com/watch?v=ID (إزالة المعلومات الزائدة)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ تحويل الثواني لـ HH:MM:SS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+toHHMMSS(sec):
+  65 → "00:01:05"
+  3665 → "01:01:05"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ تنزيل مقطع الصوت ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async downloadAudioSegment(videoUrl, startTime, outputPath, cookiesArgs):
+
+  1. حساب نهاية المقطع: endTime = startTime + 60 + 2
+  2. تنسيق الفترة: sectionArg = "*HH:MM:SS-HH:MM:SS"
+
+  المحاولة 1: تنزيل جزء فقط (yt-dlp sections)
+    yt-dlp -f bestaudio[ext=m4a]/bestaudio/best
+             -x --audio-format mp3 --audio-quality 0
+             --download-sections *START-END
+             --force-keyframes-at-cuts
+             -o tmpOut --no-playlist --no-check-certificates
+
+    مع 3 محاولات لـ player_client:
+      1. mweb,android
+      2. tv,ios
+      3. (بدون خيارات)
+
+  المحاولة 2 (Fallback): تنزيل الفيديو كاملاً ثم قصه
+    yt-dlp -f bestaudio... --audio-quality 0 -o tmpFull
+
+    ffmpeg -ss START -t 60 -i tmpFull
+           -ar 22050 -ac 1 -f mp3 -y outputPath
+
+  المحاولة 3: ffmpeg على المقطع المُنزّل
+    ffmpeg -i tmpMp3 -ar 22050 -ac 1 -f mp3 -y outputPath
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ حساب مدة ملف صوتي ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async getAudioDuration(audioPath):
+  ffprobe -v quiet -print_format json -show_streams audioPath
+  → يُحلّل JSON → يُستخرج duration
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ تعديل سرعة الصوت ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async applyAtempo(inputPath, rate, outputPath):
+  - يقصّر/يطيل الصوت حسب rate
+  - ffmpeg يدعم atempo بين 0.5 و 100.0
+  - إذا rate > 2.0 → يُستخدم سلسلتين: atempo=√rate,atempo=√rate
+  - مثال: rate=2.1 → atempo=1.449,atempo=1.449
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ تحويل الصوت لنص (Whisper) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async transcribeLocalWhisperJSON(audioPath, modelSize="small"):
+  - يستدعي python3 whisper_local.py audioPath modelSize --json
+  - timeout: 5 دقائق
+  - maxBuffer: 10 MB
+  - يتحقق من stderr للمعلومات
+  - يحلّل stdout كـ JSON
+  - يرجع: WhisperSentence[]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ الترجمة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async translateWithGoogle(text):
+  - يستدعي Google Translate API المجاني
+  - URL: translate.googleapis.com/translate_a/single
+  - sl=auto (اكتشاف اللغة تلقائياً)
+  - tl=ar (العربية)
+
+async translateWithPollinations(text):
+  - يستدعي text.pollinations.ai
+  - prompt: "Translate to Arabic. Return only Arabic."
+  - timeout: 30 ثانية
+
+async translateWithOpenAI(text):
+  - يستدعي GPT-4o-mini
+  - system: "Professional translator. Translate to Arabic."
+  - temperature: 0.3 (أقل إبداع، أكثر دقة)
+  - max_tokens: 2048
+
+async translateText(text, engine, jobId):
+  switch:
+    google → translateWithGoogle
+    pollinations → translateWithPollinations (fall back to Google)
+    openai → translateWithOpenAI (fall back to Google)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ معالجة جملة واحدة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async processSentence(jobId, ws, i, totalCount, voice, engine, tmpDir, perSentenceMap, completedCountRef):
+
+  الخطوات:
+  1. تعليم الجملة: "translating"
+  2. ترجمة النص: translateText(ws.text, ...)
+  3. تعليم الجملة: "tts" + حفظ arabicText
+  4. تحضير نص TTS: prepareTextForTTS(arabicText)
+  5. توليد صوت (3 محاولات):
+     synthesizeEdgeTTS(ttsText, voice, 1.0, ttsRaw)
+  6. حساب مدة TTS: getAudioDuration(ttsRaw)
+  7. حساب نسبة السرعة:
+     originalDuration = ws.end - ws.start
+     rawAtempo = ttsDuration / originalDuration
+     clampedAtempo = min(MAX_ATEMPO, max(MIN_ATEMPO, rawAtempo))
+  8. إذا clampedAtempo > 1.04:
+     applyAtempo(ttsRaw, clampedAtempo, ttsFinal)
+  9. حفظ المسار في perSentenceMap
+  10. تعليم الجملة: "completed"
+      - videoStart, videoEnd, arabicText
+      - audioStart, audioEnd, audioUrl
+      - audioDuration, sentenceStatus="completed"
+      - originalDuration, ttsDuration, speedRatio
+  11. تحديث التقدم: "✅ N/M جملة جاهزة"
+
+  في حالة الخطأ:
+  - تعليم الجملة: "failed"
+  - تسجيل الخطأ في السجلات
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ المعالجة الرئيسية ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async processVideoSegment({ jobId, videoUrl, startTime, voice, translationEngine }):
+
+  1. إنشاء مجلد مؤقت: mkdtemp("vt-")
+  2. مسار ملف الإدخال: tmpDir/{jobId}-input.mp3
+  3. تهيئة Map للجمل: sentenceAudioMap.set(jobId, perSentenceMap)
+
+  الخطوات:
+  ════════════════════════════════════════════════════════════════════════
+  الخطوة 1: تنزيل الصوت
+    updateJob(jobId, { status: "processing", progress: "⬇️ تنزيل الصوت..." })
+    await downloadAudioSegment(safeUrl, startTime, audioInputPath, cookiesArgs)
+
+  الخطوة 2: تحويل الصوت لنص (Whisper)
+    updateJob(jobId, { progress: "🎙️ تحميل نموذج Whisper..." })
+    const whisperSentences = await transcribeLocalWhisperJSON(audioInputPath, "small")
+
+  الخطوة 3: تهيئة الجمل
+    const pendingSentences = whisperSentences.map(ws => ({
+      videoStart, videoEnd, arabicText: "", audioStart: 0, audioEnd: 0,
+      audioUrl: undefined, audioDuration: undefined,
+      sentenceStatus: "pending", originalDuration, ttsDuration: undefined, speedRatio: undefined
+    }))
+
+    updateJob(jobId, { transcript, sentences: pendingSentences, progress: "🔄 معالجة N جملة..." })
+
+  الخطوة 4: معالجة الجمل بالتوازي (نصفين)
+    - تقسيم الجمل لنصفين: mid = ceil(total / 2)
+    - النصف الأول: [0 .. mid-1]
+    - النصف الثاني: [mid .. total-1]
+    - كل نصف يُعالج بالتوازي (Promise.all)
+    - داخل كل نصف، الجمل تُعالج بالتوازي أيضاً
+
+    await Promise.all([
+      Promise.all(firstHalfIndices.map(i => processSentence(...))),
+      Promise.all(secondHalfIndices.map(i => processSentence(...)))
+    ])
+
+  الخطوة 5: إكمال
+    - حساب audioDurationSec = مجموع مدد الجمل
+    - updateJob(jobId, { status: "completed", progress: "✅ N/N جملة جاهزة", audioDurationSec })
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ معلومات الفيديو ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async getVideoInfo(videoUrl):
+  yt-dlp --print "%(title)s" --no-playlist --no-check-certificates --socket-timeout 10 url
+  → يرجع { title }
+
+===============================================================
+   الجزء 6: نموذج Whisper (whisper_local.py)
+===============================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ الأهداف ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+هدف هذا الملف: تحويل ملف صوتي إلى نص مع توقيتات دقيقة لكل كلمة وجملة.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ الكلمات المالئة (Filler Words) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FILLER_WORDS = {"uh", "um", "hmm", "hm"}
+
+هذه الكلمات تُحذف من النتيجة لأنها أصوات غير مهمة.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ المعالجة اللاحقة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+def post_process(text):
+  1. تقسيم النص لكلمات
+  2. إزالة الكلمات المالئة
+  3. إزالة النص بين [ ]
+  4. إزالة النص بين ( )
+  5. تقليص المسافات المتعددة
+  → إرجاع النص النظيف
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ دالة transcribe() ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def transcribe(audio_path, model_size="small", return_json=False):
+
+  1. تحميل النموذج:
+     WhisperModel("small", device="cpu", compute_type="int8")
+
+  2. المعالجة الرئيسية - run_transcription(use_vad, threshold):
+     model.transcribe(
+       audio_path,
+       beam_size=5,
+       best_of=5,
+       language=None,              // اكتشاف تلقائي
+       condition_on_previous_text=True,
+       word_timestamps=True,       // توقيت كل كلمة
+       no_speech_threshold=0.7,    // قبول المقاطع غير المؤكدة
+       log_prob_threshold=-1.2,    // قبول كلام منخفض الثقة
+       compression_ratio_threshold=2.8,
+       vad_filter=True,
+       vad_parameters={
+         min_silence_duration_ms: 200,   // صمت 200ms = فاصل جملة
+         speech_pad_ms: 400,             // padding حول الكلام
+         threshold: 0.20                 // عتبة VAD
+       }
+     )
+
+  3. المحاولة الأولى: threshold=0.20
+  4. Fallback: إذا لم توجد نتائج → threshold=0.10
+  5. Fallback 2: إذا لم توجد → بدون VAD
+
+  6. لكل مقطع (segment):
+     - تنظيف النص عبر post_process()
+     - إذا النص فارغ → تخطي
+     - تسجيل: [start-end] words=N | text
+     - جمع الكلمات مع توقيتاتها
+     - إضافة للنتائج: { start, end, text, words[] }
+
+  7. الإرجاع:
+     - return_json=True  → [{start, end, text, words[]}]
+     - return_json=False → "text1 text2 text3..."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ المعاملات المُحسّنة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+بعد الإصلاحات الأخيرة (25 مايو 2026):
+• النموذج: tiny → small (أكبر وأدق)
+• FILLER_WORDS: تقليص القائمة (لا تحذف كلمات حقيقية)
+• min_silence_duration_ms: 500 → 200 (لا تدمج الكلمات القريبة)
+• speech_pad_ms: 200 → 400 (padding أكبر)
+• VAD threshold: 0.28 → 0.20 (لا تستبعد الكلام الهادئ)
+• no_speech_threshold=0.7 (قبول مقاطع أكثر)
+• log_prob_threshold=-1.2 (قبول كلام منخفض الثقة)
+• compression_ratio_threshold=2.8 (لا تخطي المقاطع المتكررة)
+• fallback threshold: 0.15 → 0.10
+
+===============================================================
+   الجزء 7: تدفق البيانات الكامل
+===============================================================
+
+[المستخدم]
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 1. يُدخل رابط يوتيوب في صفحة Home.tsx                        │
+│    (use-youtube-url.ts يُحقّق من صحة الرابط)                 │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. يضغط "تشغيل" → يرسل طلب POST /api/translate/process       │
+│    مع: الرابط + وقت البداية + الصوت المختار + محرك الترجمة   │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. الخادم (processor.ts) يبدأ المعالجة:                     │
+│    a. yt-dlp → يُنزّل 60 ثانية من الصوت بأعلى جودة           │
+│    b. ffmpeg → يُحوّل الصوت لمعدل 22050Hz أحادي القناة       │
+│    c. whisper_local.py → يستمع للصوت ويكتب النص              │
+│    d. الترجمة → Google/OpenAI/Pollinations                  │
+│    e. edge-tts → يُولّد صوت عربي لكل جملة                   │
+│    f. ffmpeg → يُعدّل سرعة الصوت (atempo) لتناسب التوقيت     │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 4. كل جملة تصبح ملف mp3 مستقل                                │
+│    يُخزّن في /tmp/ ويُقدّم عبر /api/translate/sentence-audio  │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 5. Home.tsx يستعلم الحالة كل 600ms                           │
+│    ويُظهر شريط التقدم (pipeline-bar.tsx)                      │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 6. عند اكتمال المعالجة:                                       │
+│    - يُشغّل الفيديو + يُشغّل الصوت العربي المقابل           │
+│    - يُزامن بين الفيديو والصوت في loop كل 100ms              │
+│    - يُعرض الترجمة العربية أسفل الفيديو                      │
+└─────────────────────────────────────────────────────────────┘
+
+===============================================================
+   الجزء 8: ملفات الإعداد
+===============================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ package.json (root) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+الأوامر الرئيسية:
+• pnpm run typecheck       - فحص أنواع TypeScript
+• pnpm run typecheck:libs  - بناء المكتبات
+• pnpm run build           - بناء كل شيء
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/video-translator/package.json ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+الأوامر:
+• pnpm run dev    - تشغيل Vite في وضع التطوير
+• pnpm run build  - بناء للإنتاج
+• pnpm run serve  - معاينة الإنتاج
+
+التبعيات الرئيسية:
+• react, react-dom, react-youtube
+• framer-motion, wouter
+• @tanstack/react-query
+• lucide-react, tailwindcss
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ artifacts/api-server/package.json ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+الأوامر:
+• pnpm run dev    - بناء + تشغيل
+• pnpm run build  - esbuild
+• pnpm run start  - node dist/index.mjs
+
+التبعيات:
+• express, cors, cookie-parser
+• openai, pino, pino-http
+• drizzle-orm
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ pnpm-workspace.yaml ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+تعريف حزم Workspace:
+• packages: artifacts/*, lib/*, scripts
+• catalog: إصدارات مشتركة للحزم
+• minimumReleaseAge: 1440 (دفاع ضد هجمات السلسلة)
+
+===============================================================
+   الجزء 9: الاختبار والتحقق
+===============================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ اختبار صحة الخادم ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+curl localhost:80/api/healthz
+→ {"status":"ok"}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ اختبار معالجة فيديو ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+curl -X POST localhost:80/api/translate/process \
+  -H "Content-Type: application/json" \
+  -d '{"videoUrl":"https://youtu.be/rop6eI_Da5I","startTime":0,
+       "voice":"ar-SA-HamedNeural","translationEngine":"google"}'
+→ {"jobId":"...","status":"pending","message":"بدأت المعالجة"}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ استعلام الحالة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+curl localhost:80/api/translate/status/JOB_ID
+→ { jobId, status, progress, sentences: [...] }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━ جلب صوت جملة ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+curl localhost:80/api/translate/sentence-audio/JOB_ID/0
+→ [ملف mp3 ثنائي]
+
+===============================================================
+   الجزء 10: ملخص سريع
+===============================================================
+
+المشروع = 3 أجزاء رئيسية:
+
+1. الواجهة (React):
+   • تُدخل الرابط → تُرسل طلب → تستعلم الحالة
+   • تُشغّل الفيديو + الصوت العربي معاً
+   • تُزامن بينهما (loop 100ms)
+
+2. الخادم (Express):
+   • يستقبل الطلبات
+   • يُنسّق التنزيل + التحويل + الترجمة + TTS
+   • يُخزّن المهام في الذاكرة
+   • يُقدّم ملفات الصوت
+
+3. المعالج (Python + ffmpeg):
+   • yt-dlp  → يُنزّل من يوتيوب
+   • ffmpeg  → يُحوّل/يُقصّر/يُسرّع الصوت
+   • Whisper → يستمع ويكتب
+   • EdgeTTS → يتكلم عربي
+
+كل الجمل تصبح ملفات mp3 مستقلة، تُشغّل بالتتابع
+متزامنة مع الفيديو الأصلي.
+
+===============================================================
+   النهاية
+===============================================================
