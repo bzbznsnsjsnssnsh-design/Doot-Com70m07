@@ -480,38 +480,30 @@ Priority order:
 3. Natural Arabic
 4. Brevity`;
 
-async function optimizeArabicSubtitle(text: string): Promise<string> {
-  // 1. Try Groq (fast + free + high quality)
-  if (isGroqConfigured()) {
-    const result = await callChatAPI(
-      "https://api.groq.com/openai/v1",
-      process.env.GROQ_API_KEY!,
-      "llama-3.3-70b-versatile",
-      OPTIMIZER_SYSTEM_PROMPT,
-      text,
-    );
-    if (result) return result;
-  }
+async function optimizeArabicSubtitle(text: string, jobId: string, sentenceIndex: number): Promise<string> {
+  // Optimizer only runs when GROQ_API_KEY is configured (Groq: fast, parallel-safe, high quality)
+  // Without the key, original translation is used as-is (no slowdown, no degradation)
+  if (!isGroqConfigured()) return text;
 
-  // 2. Try Pollinations OpenAI-compatible Chat API (free, no key)
-  const pollinationsResult = await callChatAPI(
-    "https://text.pollinations.ai/openai",
-    null,
-    "openai-large",
+  const result = await callChatAPI(
+    "https://api.groq.com/openai/v1",
+    process.env.GROQ_API_KEY!,
+    "llama-3.3-70b-versatile",
     OPTIMIZER_SYSTEM_PROMPT,
     text,
-    30_000,
   );
-  if (pollinationsResult) return pollinationsResult;
-
-  // 3. If all fail, return original
+  if (result) {
+    logger.info({ jobId, i: sentenceIndex, original: text.slice(0, 60), optimized: result.slice(0, 60) }, "Arabic optimized [groq]");
+    return result;
+  }
   return text;
 }
 
 async function translateText(
   text: string,
   engine: TranslationEngine,
-  jobId: string
+  jobId: string,
+  sentenceIndex = -1
 ): Promise<string> {
   let translated: string;
 
@@ -547,9 +539,7 @@ async function translateText(
 
   // Apply Arabic subtitle optimizer to ALL engines
   try {
-    const optimized = await optimizeArabicSubtitle(translated);
-    logger.info({ jobId, engine, original: translated.slice(0, 60), optimized: optimized.slice(0, 60) }, "Arabic optimized");
-    return optimized;
+    return await optimizeArabicSubtitle(translated, jobId, sentenceIndex);
   } catch (e: any) {
     logger.warn({ jobId, err: e?.message }, "Optimizer failed, using raw translation");
     return translated;
@@ -593,7 +583,7 @@ async function processSentence(
       updateJob(jobId, { sentences: [...j1.sentences] });
     }
 
-    const arabicText = await translateText(ws.text, translationEngine, jobId);
+    const arabicText = await translateText(ws.text, translationEngine, jobId, i);
 
     // Mark as TTS
     const j2 = getJob(jobId);
