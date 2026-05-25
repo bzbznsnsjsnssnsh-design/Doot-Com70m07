@@ -416,7 +416,42 @@ async function translateWithGroq(text: string): Promise<string> {
 }
 
 // ── Arabic subtitle optimizer prompt (applied to ALL engines) ────────────────
-const ARABIC_OPTIMIZER_PROMPT = `You are an expert Arabic subtitle optimizer.
+async function callChatAPI(
+  baseUrl: string,
+  apiKey: string | null,
+  model: string,
+  systemPrompt: string,
+  userText: string,
+  timeoutMs = 25_000
+): Promise<string | null> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user",   content: userText },
+        ],
+        temperature: 0.2,
+        max_tokens: 512,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as any;
+    return data?.choices?.[0]?.message?.content?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// System prompt for the optimizer (without {{TEXT}} — user message carries the text)
+const OPTIMIZER_SYSTEM_PROMPT = `You are an expert Arabic subtitle optimizer.
 
 Your task is NOT to translate literally.
 
@@ -443,57 +478,33 @@ Priority order:
 1. Meaning accuracy
 2. Clarity
 3. Natural Arabic
-4. Brevity
-
-Input:
-{{TEXT}}
-
-Output:
-Improved Arabic only.`;
+4. Brevity`;
 
 async function optimizeArabicSubtitle(text: string): Promise<string> {
-  const prompt = ARABIC_OPTIMIZER_PROMPT.replace("{{TEXT}}", text);
-
-  // Try Groq first (fast + free + high quality)
+  // 1. Try Groq (fast + free + high quality)
   if (isGroqConfigured()) {
-    try {
-      const apiKey = process.env.GROQ_API_KEY!;
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.2,
-          max_tokens: 512,
-        }),
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (response.ok) {
-        const data = await response.json() as any;
-        const result = data?.choices?.[0]?.message?.content?.trim();
-        if (result) return result;
-      }
-    } catch {}
+    const result = await callChatAPI(
+      "https://api.groq.com/openai/v1",
+      process.env.GROQ_API_KEY!,
+      "llama-3.3-70b-versatile",
+      OPTIMIZER_SYSTEM_PROMPT,
+      text,
+    );
+    if (result) return result;
   }
 
-  // Fallback: Pollinations (free, no key needed)
-  try {
-    const url = `https://text.pollinations.ai/${encodeURIComponent(prompt)}`;
-    const response = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (response.ok) {
-      const result = (await response.text()).trim();
-      if (result) return result;
-    }
-  } catch {}
+  // 2. Try Pollinations OpenAI-compatible Chat API (free, no key)
+  const pollinationsResult = await callChatAPI(
+    "https://text.pollinations.ai/openai",
+    null,
+    "openai-large",
+    OPTIMIZER_SYSTEM_PROMPT,
+    text,
+    30_000,
+  );
+  if (pollinationsResult) return pollinationsResult;
 
-  // If all optimizers fail, return original text
+  // 3. If all fail, return original
   return text;
 }
 
