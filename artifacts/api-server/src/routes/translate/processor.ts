@@ -102,7 +102,7 @@ export function getSentenceAudioPath(jobId: string, idx: number): string | undef
 
 export { EDGE_TTS_VOICES as TTS_VOICES };
 
-export type TranslationEngine = "openai" | "google" | "pollinations";
+export type TranslationEngine = "openai" | "google" | "pollinations" | "groq";
 
 interface ProcessOptions {
   jobId: string;
@@ -374,6 +374,47 @@ async function translateWithOpenAI(text: string): Promise<string> {
   return response.choices[0]?.message?.content?.trim() ?? text;
 }
 
+function isGroqConfigured(): boolean {
+  const key = process.env.GROQ_API_KEY || "";
+  return key.length > 10;
+}
+
+async function translateWithGroq(text: string): Promise<string> {
+  const apiKey = process.env.GROQ_API_KEY || "";
+  if (!apiKey) throw new Error("GROQ_API_KEY غير مضبوط");
+
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        {
+          role: "system",
+          content: "You are a professional translator. Translate the given text to Arabic. Return only the Arabic translation, nothing else.",
+        },
+        { role: "user", content: text },
+      ],
+      temperature: 0.3,
+      max_tokens: 2048,
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  if (!response.ok) {
+    const err = await response.text().catch(() => "");
+    throw new Error(`Groq API: ${response.status} ${err.slice(0, 100)}`);
+  }
+
+  const data = await response.json() as any;
+  const result = data?.choices?.[0]?.message?.content?.trim();
+  if (!result) throw new Error("Groq returned empty result");
+  return result;
+}
+
 async function translateText(
   text: string,
   engine: TranslationEngine,
@@ -387,6 +428,13 @@ async function translateText(
         return await translateWithPollinations(text);
       } catch {
         logger.info({ jobId }, "Pollinations failed, falling back to Google");
+        return translateWithGoogle(text);
+      }
+    case "groq":
+      try {
+        return await translateWithGroq(text);
+      } catch (e: any) {
+        logger.warn({ jobId, err: e?.message }, "Groq failed, falling back to Google");
         return translateWithGoogle(text);
       }
     case "openai":

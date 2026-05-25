@@ -26,7 +26,7 @@ const POLL_MS       = 600;
 const MAX_RETRIES   = 2;
 const NAV_GRACE_MS  = 1500; // after sentence nav, block auto-switching for this long
 
-type TranslationEngine = 'openai' | 'google' | 'pollinations';
+type TranslationEngine = 'openai' | 'google' | 'pollinations' | 'groq';
 type SentenceStatus    = 'pending' | 'translating' | 'tts' | 'completed' | 'failed';
 
 interface StoredSentence {
@@ -126,9 +126,10 @@ async function deleteCookiesReq() {
 
 // ─── Static data ──────────────────────────────────────────────────────────────
 const TRANSLATION_ENGINES: { value: TranslationEngine; label: string; description: string; free: boolean }[] = [
-  { value: 'google',       label: 'Google Translate', description: 'مجاني • سريع',         free: true  },
-  { value: 'pollinations', label: 'Pollinations AI',  description: 'مجاني • ذكاء اصطناعي', free: true  },
-  { value: 'openai',       label: 'OpenAI GPT',       description: 'دقيق • يحتاج مفتاح',    free: false },
+  { value: 'google',       label: 'Google Translate', description: 'مجاني • سريع',                    free: true  },
+  { value: 'pollinations', label: 'Pollinations AI',  description: 'مجاني • ذكاء اصطناعي',            free: true  },
+  { value: 'groq',         label: 'Groq Llama 3.3',  description: 'مجاني • جودة عالية • يحتاج مفتاح', free: true  },
+  { value: 'openai',       label: 'OpenAI GPT',       description: 'دقيق • يحتاج مفتاح',              free: false },
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────

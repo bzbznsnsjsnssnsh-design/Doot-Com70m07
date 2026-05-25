@@ -190,8 +190,8 @@ components:
           description: Edge TTS voice name
         translationEngine:
           type: string
-          description: Translation engine to use (openai, google, pollinations)
-          enum: [openai, google, pollinations]
+          description: Translation engine to use (openai, google, pollinations, groq)
+          enum: [openai, google, pollinations, groq]
         forceAudioExtraction:
           type: boolean
           description: Skip captions and extract audio directly for AI transcription

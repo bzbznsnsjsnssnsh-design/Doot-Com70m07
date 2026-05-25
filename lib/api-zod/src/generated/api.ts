@@ -24,9 +24,9 @@ export const ProcessVideoBody = zod.object({
   startTime: zod.number().describe("Start time in seconds"),
   voice: zod.string().describe("Edge TTS voice name"),
   translationEngine: zod
-    .enum(["openai", "google", "pollinations"])
+    .enum(["openai", "google", "pollinations", "groq"])
     .optional()
-    .describe("Translation engine to use (openai, google, pollinations)"),
+    .describe("Translation engine to use (openai, google, pollinations, groq)"),
   forceAudioExtraction: zod
     .boolean()
     .optional()
