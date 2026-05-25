@@ -415,34 +415,133 @@ async function translateWithGroq(text: string): Promise<string> {
   return result;
 }
 
+// ── Arabic subtitle optimizer prompt (applied to ALL engines) ────────────────
+const ARABIC_OPTIMIZER_PROMPT = `You are an expert Arabic subtitle optimizer.
+
+Your task is NOT to translate literally.
+
+Your goal is to produce the shortest, clearest, most natural Arabic sentence that preserves the intended meaning.
+
+Instructions:
+
+- First understand the intended meaning.
+- Ignore broken wording, bad translation, speech recognition errors, and awkward machine translation.
+- Fix spelling, grammar, punctuation, and sentence structure.
+- If the sentence is unclear, infer the most likely meaning from context and rewrite it naturally.
+- You may completely rewrite the sentence if necessary.
+- Keep the original meaning.
+- Make the sentence as short as possible without losing meaning.
+- Remove unnecessary words.
+- Use natural modern Arabic.
+- Keep names, numbers, brands, and technical terms.
+- Do not explain.
+- Do not comment.
+- Do not show alternatives.
+- Output only the final improved Arabic sentence.
+
+Priority order:
+1. Meaning accuracy
+2. Clarity
+3. Natural Arabic
+4. Brevity
+
+Input:
+{{TEXT}}
+
+Output:
+Improved Arabic only.`;
+
+async function optimizeArabicSubtitle(text: string): Promise<string> {
+  const prompt = ARABIC_OPTIMIZER_PROMPT.replace("{{TEXT}}", text);
+
+  // Try Groq first (fast + free + high quality)
+  if (isGroqConfigured()) {
+    try {
+      const apiKey = process.env.GROQ_API_KEY!;
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.2,
+          max_tokens: 512,
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.ok) {
+        const data = await response.json() as any;
+        const result = data?.choices?.[0]?.message?.content?.trim();
+        if (result) return result;
+      }
+    } catch {}
+  }
+
+  // Fallback: Pollinations (free, no key needed)
+  try {
+    const url = `https://text.pollinations.ai/${encodeURIComponent(prompt)}`;
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (response.ok) {
+      const result = (await response.text()).trim();
+      if (result) return result;
+    }
+  } catch {}
+
+  // If all optimizers fail, return original text
+  return text;
+}
+
 async function translateText(
   text: string,
   engine: TranslationEngine,
   jobId: string
 ): Promise<string> {
+  let translated: string;
+
   switch (engine) {
     case "google":
-      return translateWithGoogle(text);
+      translated = await translateWithGoogle(text);
+      break;
     case "pollinations":
       try {
-        return await translateWithPollinations(text);
+        translated = await translateWithPollinations(text);
       } catch {
         logger.info({ jobId }, "Pollinations failed, falling back to Google");
-        return translateWithGoogle(text);
+        translated = await translateWithGoogle(text);
       }
+      break;
     case "groq":
       try {
-        return await translateWithGroq(text);
+        translated = await translateWithGroq(text);
       } catch (e: any) {
         logger.warn({ jobId, err: e?.message }, "Groq failed, falling back to Google");
-        return translateWithGoogle(text);
+        translated = await translateWithGoogle(text);
       }
+      break;
     case "openai":
     default:
       if (isOpenAIConfigured()) {
-        return translateWithOpenAI(text);
+        translated = await translateWithOpenAI(text);
+      } else {
+        translated = await translateWithGoogle(text);
       }
-      return translateWithGoogle(text);
+      break;
+  }
+
+  // Apply Arabic subtitle optimizer to ALL engines
+  try {
+    const optimized = await optimizeArabicSubtitle(translated);
+    logger.info({ jobId, engine, original: translated.slice(0, 60), optimized: optimized.slice(0, 60) }, "Arabic optimized");
+    return optimized;
+  } catch (e: any) {
+    logger.warn({ jobId, err: e?.message }, "Optimizer failed, using raw translation");
+    return translated;
   }
 }
 
